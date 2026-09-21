@@ -28,8 +28,8 @@ module.exports = {
     tourBoxes: {
       label: '巡演装箱单',
       defaultStatus: '草稿',
-      statuses: ['草稿', '已装箱', '巡演中', '返场清点中', '已闭环'],
-      required: ['showName', 'venue', 'play', 'headIds', 'accessoryIds'],
+      statuses: ['草稿', '已装箱', '已封箱', '巡演中', '待复核', '可演出', '已闭环'],
+      required: ['showName', 'venue', 'play'],
       titleFields: ['showName', 'play']
     },
     lossReports: {
@@ -57,6 +57,36 @@ module.exports = {
       note: '返场发现掉彩'
     },
     {
+      collection: 'puppetHeads',
+      id: 'head-seed-2',
+      status: '可演出',
+      data: {
+        role: '孙悟空',
+        play: '火焰山',
+        paintStatus: '彩绘完好',
+        mechanism: '火眼金睛机关正常',
+        accessories: ['紫金冠'],
+        boxNo: '木箱甲-01',
+        currentUsable: true
+      },
+      note: '巡演主力偶头'
+    },
+    {
+      collection: 'puppetHeads',
+      id: 'head-seed-3',
+      status: '可演出',
+      data: {
+        role: '铁扇公主',
+        play: '火焰山',
+        paintStatus: '彩绘完好',
+        mechanism: '水袖机关正常',
+        accessories: ['凤冠'],
+        boxNo: '木箱甲-02',
+        currentUsable: true
+      },
+      note: '巡演主力偶头'
+    },
+    {
       collection: 'accessories',
       id: 'accessory-seed-1',
       status: '在库',
@@ -66,11 +96,35 @@ module.exports = {
         play: '火焰山',
         boxNo: '配件箱-02'
       }
+    },
+    {
+      collection: 'accessories',
+      id: 'accessory-seed-2',
+      status: '在库',
+      data: {
+        name: '紫金冠',
+        role: '孙悟空',
+        play: '火焰山',
+        boxNo: '配件箱-01'
+      }
+    },
+    {
+      collection: 'accessories',
+      id: 'accessory-seed-3',
+      status: '在库',
+      data: {
+        name: '凤冠',
+        role: '铁扇公主',
+        play: '火焰山',
+        boxNo: '配件箱-01'
+      }
     }
   ],
   examples: [
     'GET /api/puppetHeads?play=火焰山&status=可演出 查询某剧目可用偶头',
-    'POST /api/tourBoxes 创建巡演装箱单',
-    'POST /api/lossReports 登记返场缺损或遗失'
+    'POST /api/tourBoxes/pack 创建装箱单并封箱前核对偶头、配件与箱号',
+    'POST /api/tourBoxes/:id/seal 补封签（未结束装箱单内封签号唯一，并发沿用首次结果）',
+    'POST /api/tourBoxes/:id/arrive 到场解封登记，不符只转待复核',
+    'POST /api/tourBoxes/:id/correct 更正箱号/清单/封签，原解封与演出资格失效留档'
   ]
 };
