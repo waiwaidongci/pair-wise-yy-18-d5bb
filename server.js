@@ -1,51 +1,13 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
+const db = require('./lib/storage/db');
+const tourRoutes = require('./lib/entry/tourRoutes');
 const config = require('./project.config');
 
 const app = express();
 const PORT = process.env.PORT || config.port;
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'app.db');
 
 app.use(express.json({ limit: '2mb' }));
-
-function sqlValue(value) {
-  if (value === null || value === undefined) return 'NULL';
-  return "'" + String(value).replaceAll("'", "''") + "'";
-}
-
-function runSql(sql) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  return execFileSync('sqlite3', [DB_FILE], {
-    input: sql,
-    encoding: 'utf8'
-  });
-}
-
-function select(sql) {
-  const output = runSql('.mode json\n' + sql);
-  if (!output.trim()) return [];
-  return JSON.parse(output);
-}
-
-function now() {
-  return new Date().toISOString();
-}
-
-function toRecord(row) {
-  const data = JSON.parse(row.data || '{}');
-  return {
-    id: row.id,
-    collection: row.collection,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    ...data
-  };
-}
 
 function findCollection(name) {
   const collection = config.collections[name];
@@ -73,101 +35,52 @@ function validate(collectionConfig, data) {
   }
 }
 
-function insertEvent({ recordId, collection, action, status, actor, note, data }) {
-  runSql(
-    'INSERT INTO events (id, record_id, collection, action, status, actor, note, data, created_at) VALUES (' +
-    [
-      sqlValue(randomUUID()),
-      sqlValue(recordId),
-      sqlValue(collection),
-      sqlValue(action || '记录'),
-      sqlValue(status || ''),
-      sqlValue(actor || ''),
-      sqlValue(note || ''),
-      sqlValue(JSON.stringify(data || {})),
-      sqlValue(now())
-    ].join(', ') +
-    ');'
-  );
-}
-
-function initDb() {
-  runSql(`
-CREATE TABLE IF NOT EXISTS records (
-  id TEXT PRIMARY KEY,
-  collection TEXT NOT NULL,
-  status TEXT NOT NULL,
-  title TEXT NOT NULL,
-  data TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_records_collection ON records(collection);
-CREATE INDEX IF NOT EXISTS idx_records_status ON records(status);
-CREATE TABLE IF NOT EXISTS events (
-  id TEXT PRIMARY KEY,
-  record_id TEXT NOT NULL,
-  collection TEXT NOT NULL,
-  action TEXT NOT NULL,
-  status TEXT,
-  actor TEXT,
-  note TEXT,
-  data TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_record ON events(record_id);
-`);
-
-  const count = select('SELECT COUNT(*) AS count FROM records;')[0].count;
-  if (count > 0) return;
-
-  for (const seed of config.seed || []) {
-    const collectionConfig = findCollection(seed.collection);
-    const id = seed.id || randomUUID();
-    const createdAt = seed.createdAt || now();
-    const status = seed.status || collectionConfig.defaultStatus || '';
-    const data = { ...seed.data, status };
-    runSql(
-      'INSERT INTO records (id, collection, status, title, data, created_at, updated_at) VALUES (' +
-      [
-        sqlValue(id),
-        sqlValue(seed.collection),
-        sqlValue(status),
-        sqlValue(titleFor(collectionConfig, data)),
-        sqlValue(JSON.stringify(data)),
-        sqlValue(createdAt),
-        sqlValue(seed.updatedAt || createdAt)
-      ].join(', ') +
-      ');'
-    );
-    insertEvent({
-      recordId: id,
-      collection: seed.collection,
-      action: seed.eventAction || '创建',
-      status,
-      actor: seed.actor || 'system',
-      note: seed.note || '',
-      data
-    });
-  }
+function toRecord(row) {
+  const data = JSON.parse(row.data || '{}');
+  return {
+    id: row.id,
+    collection: row.collection,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...data
+  };
 }
 
 function loadRecord(collection, id) {
-  const rows = select(
-    'SELECT * FROM records WHERE collection = ' + sqlValue(collection) + ' AND id = ' + sqlValue(id) + ' LIMIT 1;'
+  const row = db.selectOne(
+    'SELECT * FROM records WHERE collection = ' + db.sqlValue(collection) + ' AND id = ' + db.sqlValue(id) + ' LIMIT 1;'
   );
-  return rows[0] ? toRecord(rows[0]) : null;
+  return row ? toRecord(row) : null;
+}
+
+function insertEvent({ recordId, collection, action, status, actor, note, data }) {
+  db.mutate([
+    'INSERT INTO events (id, record_id, collection, action, status, actor, note, data, created_at) VALUES (' +
+    [
+      db.sqlValue(randomUUID()),
+      db.sqlValue(recordId),
+      db.sqlValue(collection),
+      db.sqlValue(action || '记录'),
+      db.sqlValue(status || ''),
+      db.sqlValue(actor || ''),
+      db.sqlValue(note || ''),
+      db.sqlValue(JSON.stringify(data || {})),
+      db.sqlValue(db.now())
+    ].join(', ') +
+    ');'
+  ]);
 }
 
 function saveRecord(collection, id, data, status) {
   const collectionConfig = findCollection(collection);
-  runSql(
-    'UPDATE records SET status = ' + sqlValue(status) +
-    ', title = ' + sqlValue(titleFor(collectionConfig, data)) +
-    ', data = ' + sqlValue(JSON.stringify(data)) +
-    ', updated_at = ' + sqlValue(now()) +
-    ' WHERE collection = ' + sqlValue(collection) + ' AND id = ' + sqlValue(id) + ';'
-  );
+  db.mutate([
+    'UPDATE records SET status = ' + db.sqlValue(status) +
+    ', title = ' + db.sqlValue(titleFor(collectionConfig, data)) +
+    ', data = ' + db.sqlValue(JSON.stringify(data)) +
+    ', updated_at = ' + db.sqlValue(db.now()) +
+    ' WHERE collection = ' + db.sqlValue(collection) + ' AND id = ' + db.sqlValue(id) + ';'
+  ]);
 }
 
 function applyQuery(records, query) {
@@ -186,7 +99,23 @@ function applyQuery(records, query) {
   });
 }
 
-initDb();
+// 装箱单的写入必须走专用业务接口（封箱/到场/更正/闭环），避免绕过判定
+function guardTourBoxWrites(req, res, next) {
+  if (req.params.collection === 'tourBoxes' && req.method !== 'GET') {
+    return res.status(405).json({
+      error: 'tourBoxes 写操作请使用专用接口',
+      endpoints: [
+        'POST /api/tourBoxes',
+        'POST /api/tourBoxes/:id/seal',
+        'POST /api/tourBoxes/:id/arrival',
+        'POST /api/tourBoxes/:id/correct',
+        'POST /api/tourBoxes/:id/close',
+        'GET  /api/tourBoxes/:id/history'
+      ]
+    });
+  }
+  next();
+}
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: config.title, port: PORT });
@@ -201,11 +130,14 @@ app.get('/api/meta', (req, res) => {
   });
 });
 
+// 入口层：装箱业务模块（必须挂在通用 /api/:collection 之前）
+app.use('/api/tourBoxes', tourRoutes);
+
 app.get('/api/:collection', (req, res, next) => {
   try {
     findCollection(req.params.collection);
-    const rows = select(
-      'SELECT * FROM records WHERE collection = ' + sqlValue(req.params.collection) + ' ORDER BY updated_at DESC;'
+    const rows = db.select(
+      'SELECT * FROM records WHERE collection = ' + db.sqlValue(req.params.collection) + ' ORDER BY updated_at DESC;'
     ).map(toRecord);
     const filtered = applyQuery(rows, req.query);
     const limit = Number(req.query.limit || 0);
@@ -215,7 +147,7 @@ app.get('/api/:collection', (req, res, next) => {
   }
 });
 
-app.post('/api/:collection', (req, res, next) => {
+app.post('/api/:collection', guardTourBoxWrites, (req, res, next) => {
   try {
     const collectionConfig = findCollection(req.params.collection);
     const data = { ...collectionConfig.defaults, ...req.body };
@@ -223,20 +155,19 @@ app.post('/api/:collection', (req, res, next) => {
     data.status = status;
     validate(collectionConfig, data);
     const id = randomUUID();
-    const createdAt = now();
-    runSql(
+    const createdAt = db.now();
+    db.mutate([
       'INSERT INTO records (id, collection, status, title, data, created_at, updated_at) VALUES (' +
       [
-        sqlValue(id),
-        sqlValue(req.params.collection),
-        sqlValue(status),
-        sqlValue(titleFor(collectionConfig, data)),
-        sqlValue(JSON.stringify(data)),
-        sqlValue(createdAt),
-        sqlValue(createdAt)
-      ].join(', ') +
-      ');'
-    );
+        db.sqlValue(id),
+        db.sqlValue(req.params.collection),
+        db.sqlValue(status),
+        db.sqlValue(titleFor(collectionConfig, data)),
+        db.sqlValue(JSON.stringify(data)),
+        db.sqlValue(createdAt),
+        db.sqlValue(createdAt)
+      ].join(', ') + ');'
+    ]);
     insertEvent({
       recordId: id,
       collection: req.params.collection,
@@ -263,7 +194,7 @@ app.get('/api/:collection/:id', (req, res, next) => {
   }
 });
 
-app.patch('/api/:collection/:id', (req, res, next) => {
+app.patch('/api/:collection/:id', guardTourBoxWrites, (req, res, next) => {
   try {
     findCollection(req.params.collection);
     const record = loadRecord(req.params.collection, req.params.id);
@@ -291,7 +222,7 @@ app.patch('/api/:collection/:id', (req, res, next) => {
   }
 });
 
-app.post('/api/:collection/:id/events', (req, res, next) => {
+app.post('/api/:collection/:id/events', guardTourBoxWrites, (req, res, next) => {
   try {
     const collectionConfig = findCollection(req.params.collection);
     const record = loadRecord(req.params.collection, req.params.id);
@@ -326,8 +257,8 @@ app.get('/api/:collection/:id/timeline', (req, res, next) => {
     findCollection(req.params.collection);
     const record = loadRecord(req.params.collection, req.params.id);
     if (!record) return res.status(404).json({ error: 'not found' });
-    const events = select(
-      'SELECT * FROM events WHERE record_id = ' + sqlValue(req.params.id) + ' ORDER BY created_at ASC;'
+    const events = db.select(
+      'SELECT * FROM events WHERE record_id = ' + db.sqlValue(req.params.id) + ' ORDER BY created_at ASC;'
     ).map((event) => ({
       id: event.id,
       action: event.action,
@@ -343,21 +274,36 @@ app.get('/api/:collection/:id/timeline', (req, res, next) => {
   }
 });
 
-app.delete('/api/:collection/:id', (req, res, next) => {
+app.delete('/api/:collection/:id', guardTourBoxWrites, (req, res, next) => {
   try {
     findCollection(req.params.collection);
-    runSql('DELETE FROM records WHERE collection = ' + sqlValue(req.params.collection) + ' AND id = ' + sqlValue(req.params.id) + ';');
-    runSql('DELETE FROM events WHERE record_id = ' + sqlValue(req.params.id) + ';');
+    db.mutate([
+      'DELETE FROM records WHERE collection = ' + db.sqlValue(req.params.collection) + ' AND id = ' + db.sqlValue(req.params.id) + ';',
+      'DELETE FROM events WHERE record_id = ' + db.sqlValue(req.params.id) + ';'
+    ]);
     res.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
+// 判定层错误统一映射
 app.use((error, req, res, next) => {
-  res.status(error.status || 500).json({ error: error.message || 'server error' });
+  if (error && error.status) {
+    return res.status(error.status).json({
+      error: error.message || 'business error',
+      code: error.code || 'BUSINESS_ERROR',
+      ...(error.details ? { details: error.details } : {})
+    });
+  }
+  res.status(500).json({ error: error.message || 'server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(config.title + ' API running at http://localhost:' + PORT);
+db.initDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(config.title + ' API running at http://localhost:' + PORT);
+  });
+}).catch((error) => {
+  console.error('failed to initialize database:', error);
+  process.exit(1);
 });
